@@ -200,6 +200,31 @@ export default function Home() {
     event.target.value = ""
   }, [])
 
+  const handleBackupReminder = useCallback(() => {
+    const lastBackup = localStorage.getItem("critter-last-backup")
+    const now = Date.now()
+    const oneWeek = 7 * 24 * 60 * 60 * 1000
+
+    if (!lastBackup || now - Number.parseInt(lastBackup) > oneWeek) {
+      const shouldBackup = confirm(
+        "It's been a while since your last backup. Would you like to download your configurations now?",
+      )
+      if (shouldBackup) {
+        handleExportConfigs()
+        localStorage.setItem("critter-last-backup", now.toString())
+      }
+    }
+  }, [handleExportConfigs])
+
+  // Add this useEffect after the existing ones
+  useEffect(() => {
+    if (isLoaded && configs.length > 0) {
+      // Check for backup reminder after 5 seconds
+      const timer = setTimeout(handleBackupReminder, 5000)
+      return () => clearTimeout(timer)
+    }
+  }, [isLoaded, configs.length, handleBackupReminder])
+
   // Use preview config if available, otherwise use selected config
   const activeConfig = previewConfig || selectedConfig
 

@@ -175,15 +175,16 @@ export default function AdminDashboard({
       <div className="flex justify-between items-center mb-6">
         <div>
           <h2 className="text-xl text-gray-600">Build and test your AI chat agents</h2>
+          <p className="text-sm text-green-600">✅ Auto-saved to browser storage</p>
         </div>
         <div className="flex space-x-2">
           <Button variant="outline" onClick={onExportConfigs} disabled={configs.length === 0}>
             <Download className="w-4 h-4 mr-2" />
-            Export
+            Backup ({configs.length} agents)
           </Button>
           <Button variant="outline" onClick={() => fileInputRef.current?.click()}>
             <Upload className="w-4 h-4 mr-2" />
-            Import
+            Restore
           </Button>
           <Button onClick={handleCreateNew}>Create New Agent</Button>
         </div>
