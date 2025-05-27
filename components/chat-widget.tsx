@@ -2,231 +2,229 @@
 
 import type React from "react"
 
-import { useState, useEffect, useRef } from "react"
-import { Send, X, Minimize2, Maximize2 } from "lucide-react"
+import { useState, useRef, useEffect } from "react"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardHeader } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
+import { MessageCircle, X, Send, ThumbsUp, ThumbsDown, User, Bot, ExternalLink } from "lucide-react"
+import { CritterAIAgent } from "@/lib/ai-agent"
+import { FeedbackParser } from "@/lib/feedback-parser"
+import type { CritterConfig, ChatMessage, FeedbackData } from "@/types"
 
-interface ChatMessage {
-  text: string
-  isUser: boolean
-  timestamp: Date
-  html?: string
+interface ChatWidgetProps {
+  config: CritterConfig
+  onFeedback?: (feedback: FeedbackData) => void
+  onAnalytics?: (analytics: any) => void
 }
 
-export interface ChatWidgetProps {
-  businessId?: string
-  businessName?: string
-  webhookUrl?: string
-  position?: "bottom-right" | "bottom-left"
-  primaryColor?: string
-  secondaryColor?: string
-  welcomeMessage?: string
-  width?: number
-  height?: number
-  showTimestamp?: boolean
+// Component to render formatted message content with clickable links
+function MessageContent({ content }: { content: string }) {
+  // URL detection regex
+  const urlRegex =
+    /(https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.[a-zA-Z]{2,}(?:\.[a-zA-Z]{2,})?(?:\/[^\s]*)?)/g
+
+  // Function to normalize URLs for Critter domains
+  const normalizeUrl = (url: string) => {
+    // If it's a critter.pet/booking URL, convert it to booking.critter.pet
+    if (url.includes("critter.pet/booking")) {
+      return "booking.critter.pet"
+    }
+    return url
+  }
+
+  // Function to process text and convert URLs to clickable links
+  const processTextWithLinks = (text: string) => {
+    const parts = []
+    let lastIndex = 0
+    let match
+
+    // Reset regex
+    urlRegex.lastIndex = 0
+
+    while ((match = urlRegex.exec(text)) !== null) {
+      // Add text before the URL
+      if (match.index > lastIndex) {
+        parts.push(text.substring(lastIndex, match.index))
+      }
+
+      const url = match[0]
+
+      // Normalize the URL for display
+      const normalizedUrl = normalizeUrl(url)
+
+      // Ensure URL has protocol for href
+      let href = normalizedUrl
+      if (!normalizedUrl.startsWith("http://") && !normalizedUrl.startsWith("https://")) {
+        href = `https://${normalizedUrl}`
+      }
+
+      // Add the clickable link
+      parts.push(
+        <a
+          key={match.index}
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-blue-300 underline hover:text-blue-200 inline-flex items-center gap-1"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {normalizedUrl}
+          <ExternalLink className="w-3 h-3" />
+        </a>,
+      )
+
+      lastIndex = match.index + match[0].length
+    }
+
+    // Add remaining text after the last URL
+    if (lastIndex < text.length) {
+      parts.push(text.substring(lastIndex))
+    }
+
+    return parts.length > 0 ? parts : [text]
+  }
+
+  // Split content by line breaks and render each line
+  const lines = content.split("\n")
+
+  return (
+    <div className="text-sm">
+      {lines.map((line, index) => {
+        // Handle empty lines
+        if (line.trim() === "") {
+          return <br key={index} />
+        }
+
+        // Handle bullet points
+        if (line.trim().startsWith("•") || line.trim().startsWith("-")) {
+          const bulletText = line.replace(/^[•-]\s*/, "")
+          return (
+            <div key={index} className="flex items-start space-x-2 my-1">
+              <span className="text-xs mt-1">•</span>
+              <span>{processTextWithLinks(bulletText)}</span>
+            </div>
+          )
+        }
+
+        // Handle numbered lists
+        if (/^\d+\.\s/.test(line.trim())) {
+          return (
+            <div key={index} className="my-1">
+              {processTextWithLinks(line)}
+            </div>
+          )
+        }
+
+        // Regular line with link processing
+        return (
+          <div key={index} className="my-1">
+            {processTextWithLinks(line)}
+          </div>
+        )
+      })}
+    </div>
+  )
 }
 
-export default function ChatWidget({
-  businessId = "default",
-  businessName = "Critter Pet Services",
-  webhookUrl = "https://jleib03.app.n8n.cloud/webhook/93c29983-1098-4ff9-a3c5-eae58e04fbab",
-  position = "bottom-right",
-  primaryColor = "#e75837",
-  secondaryColor = "#745e25",
-  welcomeMessage = "Welcome! How can I help you with your pet care needs today?",
-  width = 350,
-  height = 500,
-  showTimestamp = true,
-}: ChatWidgetProps) {
+export default function ChatWidget({ config, onFeedback, onAnalytics }: ChatWidgetProps) {
   const [isOpen, setIsOpen] = useState(false)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [inputValue, setInputValue] = useState("")
+  const [isLoading, setIsLoading] = useState(false)
   const [isTyping, setIsTyping] = useState(false)
-  const [userId, setUserId] = useState("")
-  const [sessionId, setSessionId] = useState("")
-  const [minimized, setMinimized] = useState(false)
+  const [sessionId] = useState(() => `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`)
+  const [userId] = useState(() => `user_${Math.random().toString(36).substr(2, 8)}`)
+  const [feedback, setFeedback] = useState<FeedbackData[]>([])
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
+  const agentRef = useRef<CritterAIAgent | null>(null)
 
-  // Generate a unique user ID and session ID on component mount
   useEffect(() => {
-    const newUserId = `user_${Math.random().toString(36).substring(2, 10)}`
-    const newSessionId = `session_${Math.random().toString(36).substring(2, 15)}`
-    setUserId(newUserId)
-    setSessionId(newSessionId)
+    agentRef.current = new CritterAIAgent(config)
 
     // Add welcome message
-    setMessages([
-      {
-        text: welcomeMessage,
-        isUser: false,
-        timestamp: new Date(),
-      },
-    ])
-  }, [welcomeMessage])
-
-  // Scroll to bottom when messages change
-  useEffect(() => {
-    if (messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: "smooth" })
+    const welcomeMessage: ChatMessage = {
+      id: "welcome",
+      content: config.welcomeMessage,
+      role: "assistant",
+      timestamp: new Date(),
+      metadata: { businessId: config.businessId, sessionId },
     }
-  }, [messages, isTyping])
+    setMessages([welcomeMessage])
+  }, [config, sessionId])
 
-  // Focus input when chat is opened
   useEffect(() => {
-    if (isOpen && !minimized && inputRef.current) {
-      inputRef.current.focus()
-    }
-  }, [isOpen, minimized])
-
-  const parseResponseText = (text: string): string => {
-    if (!text) return text
-
-    // Convert \n escape sequences to actual line breaks
-    let parsed = text.replace(/\\n/g, "\n")
-
-    // Convert markdown bold (**text**) to HTML bold for better display
-    parsed = parsed.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
-
-    return parsed
-  }
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
+  }, [messages])
 
   const handleSendMessage = async () => {
-    if (!inputValue.trim()) return
+    if (!inputValue.trim() || isLoading || !agentRef.current) return
 
-    // Add user message to chat
-    const userMessage = {
-      text: inputValue,
-      isUser: true,
+    const userMessage: ChatMessage = {
+      id: `msg_${Date.now()}_user`,
+      content: inputValue.trim(),
+      role: "user",
       timestamp: new Date(),
+      metadata: { businessId: config.businessId, sessionId },
     }
+
     setMessages((prev) => [...prev, userMessage])
-    const messageToSend = inputValue
     setInputValue("")
+    setIsLoading(true)
     setIsTyping(true)
 
     try {
-      // Prepare payload with business context - simplified format
-      const payload = {
-        message: messageToSend.trim(),
-        userId: userId,
-        sessionId: sessionId,
-        businessId: businessId,
-        businessName: businessName,
-        timestamp: new Date().toISOString(),
-      }
+      const response = await agentRef.current.generateResponse(inputValue.trim(), sessionId, userId)
 
-      console.log("Sending payload:", payload)
-
-      // Send message to webhook with proper headers
-      const response = await fetch(webhookUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        mode: "cors",
-        body: JSON.stringify(payload),
-      })
-
-      console.log("Response status:", response.status)
-
-      if (!response.ok) {
-        const errorText = await response.text()
-        console.error("Response error:", errorText)
-        throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`)
-      }
-
-      // Parse response
-      const data = await response.json()
-      console.log("Raw response data:", data)
-      console.log("Response data type:", typeof data)
-      console.log("Is array:", Array.isArray(data))
-
-      if (Array.isArray(data)) {
-        console.log("Array length:", data.length)
-        console.log("First item:", data[0])
-        if (data[0]) {
-          console.log("First item keys:", Object.keys(data[0]))
-          console.log("Output property:", data[0].output)
-        }
-      }
-
-      setIsTyping(false)
-
-      // Handle the specific response format: [{"output": "message text"}]
-      let responseText = "I received your message and I'm processing it."
-
-      // More detailed parsing with logging
-      if (Array.isArray(data)) {
-        console.log("Processing array response")
-        if (data.length > 0) {
-          console.log("Array has items")
-          const firstItem = data[0]
-          if (firstItem && typeof firstItem === "object") {
-            console.log("First item is an object")
-            if ("output" in firstItem) {
-              console.log("Found output property:", firstItem.output)
-              responseText = firstItem.output
-            } else {
-              console.log("No output property found, available keys:", Object.keys(firstItem))
-            }
-          }
-        }
-      } else if (data && typeof data === "object") {
-        console.log("Processing object response")
-        if (data.message) {
-          console.log("Found message property:", data.message)
-          responseText = data.message
-        } else if (data.response) {
-          console.log("Found response property:", data.response)
-          responseText = data.response
-        } else if (data.output) {
-          console.log("Found output property:", data.output)
-          responseText = data.output
-        } else {
-          console.log("No recognized properties found, available keys:", Object.keys(data))
-        }
-      } else {
-        console.log("Response is not an object or array:", typeof data)
-      }
-
-      console.log("Final response text:", responseText)
-
-      // Parse the response text for formatting
-      responseText = parseResponseText(responseText)
-
-      // Add bot response to chat
-      const botMessage = {
-        text: responseText,
-        isUser: false,
+      const assistantMessage: ChatMessage = {
+        id: `msg_${Date.now()}_assistant`,
+        content: response.message,
+        role: "assistant",
         timestamp: new Date(),
-        html: responseText.includes("<strong>") ? responseText : undefined, // Use HTML if we have formatting
+        metadata: {
+          businessId: config.businessId,
+          sessionId,
+          intent: response.intent,
+          confidence: response.confidence,
+          requiresHuman: response.requiresHuman,
+        },
       }
-      setMessages((prev) => [...prev, botMessage])
+
+      setMessages((prev) => [...prev, assistantMessage])
+
+      // Generate analytics
+      if (onAnalytics) {
+        const analytics = FeedbackParser.analyzeConversation([...messages, userMessage, assistantMessage], feedback)
+        onAnalytics(analytics)
+      }
     } catch (error) {
       console.error("Error sending message:", error)
-      setIsTyping(false)
-
-      // Add more specific error message based on error type
-      let errorMessage = "Sorry, there was an error processing your request."
-
-      if (error instanceof TypeError && error.message.includes("fetch")) {
-        errorMessage = "Unable to connect to the chat service. Please check your internet connection and try again."
-      } else if (error instanceof Error && error.message.includes("CORS")) {
-        errorMessage = "Connection blocked by security policy. Please contact support."
-      } else if (error instanceof Error && error.message.includes("HTTP error")) {
-        errorMessage = `Server error: ${error.message}. Please try again later.`
+      const errorMessage: ChatMessage = {
+        id: `msg_${Date.now()}_error`,
+        content: "I'm sorry, I'm having trouble responding right now. Please try again.",
+        role: "assistant",
+        timestamp: new Date(),
+        metadata: { businessId: config.businessId, sessionId },
       }
+      setMessages((prev) => [...prev, errorMessage])
+    } finally {
+      setIsLoading(false)
+      setIsTyping(false)
+    }
+  }
 
-      setMessages((prev) => [
-        ...prev,
-        {
-          text: errorMessage,
-          isUser: false,
-          timestamp: new Date(),
-        },
-      ])
+  const handleFeedback = (messageId: string, rating: "helpful" | "not-helpful") => {
+    const feedbackData: FeedbackData = {
+      messageId,
+      rating,
+      timestamp: new Date(),
+      businessId: config.businessId,
+    }
+
+    setFeedback((prev) => [...prev, feedbackData])
+
+    if (onFeedback) {
+      onFeedback(feedbackData)
     }
   }
 
@@ -237,147 +235,144 @@ export default function ChatWidget({
     }
   }
 
-  const toggleChat = () => {
-    setIsOpen(!isOpen)
-    setMinimized(false)
-  }
-
-  const toggleMinimize = (e: React.MouseEvent) => {
-    e.stopPropagation()
-    setMinimized(!minimized)
-  }
-
-  const formatTime = (date: Date) => {
-    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-  }
-
-  // Position styles
-  const positionStyles = {
+  const positionClasses = {
     "bottom-right": "bottom-4 right-4",
     "bottom-left": "bottom-4 left-4",
+    "top-right": "top-4 right-4",
+    "top-left": "top-4 left-4",
   }
 
   return (
-    <div className="fixed z-50">
-      {/* Chat button */}
+    <div className={`fixed ${positionClasses[config.position]} z-50`}>
       {!isOpen && (
-        <button
-          onClick={toggleChat}
-          className={`fixed ${positionStyles[position]} shadow-lg rounded-full p-4 text-white transition-all duration-300 hover:scale-110 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-opacity-50`}
-          style={{ backgroundColor: primaryColor }}
-          aria-label="Open chat"
+        <Button
+          onClick={() => setIsOpen(true)}
+          className="rounded-full w-14 h-14 shadow-lg hover:shadow-xl transition-all duration-200"
+          style={{ backgroundColor: config.primaryColor }}
         >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            width="24"
-            height="24"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-          </svg>
-        </button>
+          <MessageCircle className="w-6 h-6 text-white" />
+        </Button>
       )}
 
-      {/* Chat window */}
       {isOpen && (
-        <div
-          className={`fixed ${positionStyles[position]} bg-white rounded-lg shadow-xl overflow-hidden transition-all duration-300 flex flex-col`}
-          style={{
-            width: `${width}px`,
-            height: minimized ? "60px" : `${height}px`,
-            maxHeight: "80vh",
-            maxWidth: "calc(100vw - 32px)",
-          }}
+        <Card
+          className="shadow-2xl border-0 overflow-hidden flex flex-col"
+          style={{ width: config.width, height: config.height }}
         >
-          {/* Chat header */}
-          <div
-            className="p-4 text-white flex justify-between items-center cursor-pointer"
-            style={{ backgroundColor: primaryColor }}
-            onClick={minimized ? toggleMinimize : undefined}
+          <CardHeader
+            className="p-4 text-white flex flex-row items-center justify-between"
+            style={{ backgroundColor: config.primaryColor }}
           >
-            <div className="font-medium truncate">{businessName}</div>
-            <div className="flex items-center">
-              {minimized ? (
-                <Maximize2 size={18} className="cursor-pointer mr-2" onClick={toggleMinimize} />
-              ) : (
-                <Minimize2 size={18} className="cursor-pointer mr-2" onClick={toggleMinimize} />
-              )}
-              <X size={18} className="cursor-pointer" onClick={toggleChat} />
+            <div>
+              <h3 className="font-semibold text-lg">{config.businessName}</h3>
+              <p className="text-sm opacity-90">Chat with us!</p>
             </div>
-          </div>
+            <Button variant="ghost" size="sm" onClick={() => setIsOpen(false)} className="text-white hover:bg-white/20">
+              <X className="w-4 h-4" />
+            </Button>
+          </CardHeader>
 
-          {/* Chat body - hidden when minimized */}
-          {!minimized && (
-            <>
-              <div className="flex-1 p-4 overflow-y-auto bg-gray-50">
-                {messages.map((msg, index) => (
-                  <div key={index} className={`mb-4 flex ${msg.isUser ? "justify-end" : "justify-start"}`}>
+          <CardContent className="p-0 flex flex-col" style={{ height: `${config.height - 80}px` }}>
+            <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50">
+              {messages.map((message) => (
+                <div key={message.id} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
+                  <div
+                    className={`flex items-start space-x-2 max-w-[80%] ${message.role === "user" ? "flex-row-reverse space-x-reverse" : ""}`}
+                  >
                     <div
-                      className={`max-w-[80%] p-3 rounded-lg ${
-                        msg.isUser
-                          ? "bg-blue-500 text-white rounded-br-none"
-                          : "bg-gray-200 text-gray-800 rounded-bl-none"
+                      className={`w-8 h-8 rounded-full flex items-center justify-center ${
+                        message.role === "user" ? "bg-gray-300" : "text-white"
                       }`}
+                      style={message.role === "assistant" ? { backgroundColor: config.primaryColor } : {}}
                     >
-                      {msg.html ? (
-                        <div className="text-sm" dangerouslySetInnerHTML={{ __html: msg.html }}></div>
-                      ) : (
-                        <div className="text-sm whitespace-pre-wrap">{msg.text}</div>
+                      {message.role === "user" ? <User className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
+                    </div>
+                    <div className="flex flex-col">
+                      <div
+                        className={`rounded-lg p-3 ${message.role === "user" ? "bg-white border" : "text-white"}`}
+                        style={message.role === "assistant" ? { backgroundColor: config.secondaryColor } : {}}
+                      >
+                        {message.role === "assistant" ? (
+                          <MessageContent content={message.content} />
+                        ) : (
+                          <p className="text-sm">{message.content}</p>
+                        )}
+                      </div>
+                      {config.showTimestamp && (
+                        <span className="text-xs text-gray-500 mt-1 px-1">
+                          {message.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                        </span>
                       )}
-                      {showTimestamp && (
-                        <div className={`text-xs mt-1 ${msg.isUser ? "text-blue-100" : "text-gray-500"}`}>
-                          {formatTime(msg.timestamp)}
+                      {message.role === "assistant" && message.id !== "welcome" && (
+                        <div className="flex space-x-2 mt-2">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleFeedback(message.id, "helpful")}
+                            className="text-gray-500 hover:text-green-600 p-1"
+                          >
+                            <ThumbsUp className="w-3 h-3" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleFeedback(message.id, "not-helpful")}
+                            className="text-gray-500 hover:text-red-600 p-1"
+                          >
+                            <ThumbsDown className="w-3 h-3" />
+                          </Button>
                         </div>
                       )}
                     </div>
                   </div>
-                ))}
-                {isTyping && (
-                  <div className="flex justify-start mb-4">
-                    <div className="bg-gray-200 text-gray-800 p-3 rounded-lg rounded-bl-none max-w-[80%]">
+                </div>
+              ))}
+
+              {isTyping && config.enableTypingIndicator && (
+                <div className="flex justify-start">
+                  <div className="flex items-start space-x-2">
+                    <div
+                      className="w-8 h-8 rounded-full flex items-center justify-center text-white"
+                      style={{ backgroundColor: config.primaryColor }}
+                    >
+                      <Bot className="w-4 h-4" />
+                    </div>
+                    <div className="rounded-lg p-3 text-white" style={{ backgroundColor: config.secondaryColor }}>
                       <div className="flex space-x-1">
-                        <div className="w-2 h-2 bg-gray-500 rounded-full typing-dot"></div>
-                        <div className="w-2 h-2 bg-gray-500 rounded-full typing-dot"></div>
-                        <div className="w-2 h-2 bg-gray-500 rounded-full typing-dot"></div>
+                        <div className="w-2 h-2 bg-white rounded-full typing-dot"></div>
+                        <div className="w-2 h-2 bg-white rounded-full typing-dot"></div>
+                        <div className="w-2 h-2 bg-white rounded-full typing-dot"></div>
                       </div>
                     </div>
                   </div>
-                )}
-                <div ref={messagesEndRef} />
-              </div>
-
-              {/* Chat input */}
-              <div className="p-4 border-t border-gray-200 bg-white">
-                <div className="flex">
-                  <input
-                    type="text"
-                    ref={inputRef}
-                    value={inputValue}
-                    onChange={(e) => setInputValue(e.target.value)}
-                    onKeyDown={handleKeyPress}
-                    placeholder="Type your message..."
-                    className="flex-1 p-2 border border-gray-300 rounded-l-md focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-                    aria-label="Type your message"
-                  />
-                  <button
-                    onClick={handleSendMessage}
-                    className="p-2 text-white rounded-r-md focus:outline-none focus:ring-2 focus:ring-secondary focus:ring-offset-2 disabled:opacity-50"
-                    style={{ backgroundColor: secondaryColor }}
-                    disabled={!inputValue.trim()}
-                    aria-label="Send message"
-                  >
-                    <Send size={18} />
-                  </button>
                 </div>
+              )}
+
+              <div ref={messagesEndRef} />
+            </div>
+
+            <div className="p-4 border-t bg-white flex-shrink-0">
+              <div className="flex space-x-2">
+                <Input
+                  value={inputValue}
+                  onChange={(e) => setInputValue(e.target.value)}
+                  onKeyPress={handleKeyPress}
+                  placeholder="Type your message..."
+                  disabled={isLoading}
+                  className="flex-1"
+                />
+                <Button
+                  onClick={handleSendMessage}
+                  disabled={isLoading || !inputValue.trim()}
+                  style={{ backgroundColor: config.primaryColor }}
+                  className="text-white hover:opacity-90"
+                >
+                  <Send className="w-4 h-4" />
+                </Button>
               </div>
-            </>
-          )}
-        </div>
+            </div>
+          </CardContent>
+        </Card>
       )}
     </div>
   )
