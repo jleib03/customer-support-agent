@@ -6,16 +6,16 @@ import "./globals.css"
 const inter = Inter({ subsets: ["latin"] })
 
 export const metadata: Metadata = {
-  title: "Critter Chat Agent Platform",
-  description: "Deploy custom AI agents for pet service businesses with ease",
-  generator: "v0.dev",
+  title: "Critter Chat Widget",
+  description: "Standalone chat widget for Critter Pet Services",
+    generator: 'v0.dev'
 }
 
 export default function RootLayout({
   children,
-}: {
+}: Readonly<{
   children: React.ReactNode
-}) {
+}>) {
   return (
     <html lang="en">
       <body className={inter.className}>{children}</body>

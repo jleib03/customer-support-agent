@@ -1,43 +1,34 @@
 "use client"
 
-import type React from "react"
-
-import { useState, useCallback, useEffect } from "react"
-import ChatWidget from "@/components/chat-widget"
-import AdminDashboard from "@/components/admin-dashboard"
-import type { CritterConfig, FeedbackData } from "@/types"
-import { ApiClient } from "@/lib/api-client"
-
-// Fallback configuration
-const fallbackConfig: CritterConfig = {
-  businessId: "demo-pet-services",
-  businessName: "Critter Pet Services",
-  webhookUrl: "https://jleib03.app.n8n.cloud/webhook-test/803d260b-1b17-4abf-8079-2d40225c29b0",
-  position: "bottom-right",
-  primaryColor: "#e75837",
-  secondaryColor: "#745e25",
-  welcomeMessage: "Welcome to Critter Pet Services! How can I help you today?",
-  width: 350,
-  height: 500,
-  showTimestamp: true,
-  enableTypingIndicator: true,
-}
+import { useEffect, useState } from "react"
+import { type Config, fallbackConfig } from "@/lib/config"
+import ConfigForm from "@/components/config-form"
+import ConfigList from "@/components/config-list"
+import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { toast } from "sonner"
+import { useDebounce } from "@/lib/hooks/use-debounce"
+import { Badge } from "@/components/ui/badge"
 
 export default function Home() {
-  const [configs, setConfigs] = useState<CritterConfig[]>([])
-  const [selectedConfig, setSelectedConfig] = useState<CritterConfig | null>(null)
-  const [previewConfig, setPreviewConfig] = useState<CritterConfig | null>(null)
+  const [configs, setConfigs] = useState<Config[]>([])
+  const [selectedConfig, setSelectedConfig] = useState<Config>(fallbackConfig)
+  const [isDatabaseAvailable, setIsDatabaseAvailable] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [isDatabaseAvailable, setIsDatabaseAvailable] = useState(true)
-  const [dbStatus, setDbStatus] = useState<{
-    status: string
-    message: string
-    canConnect: boolean
-    isReal: boolean
-  } | null>(null)
+  const [dbStatus, setDbStatus] = useState<any>(null)
 
-  // Check database status first
+  const [filter, setFilter] = useState("")
+  const debouncedFilter = useDebounce(filter, 500)
+
   useEffect(() => {
     checkDatabaseStatus()
   }, [])
@@ -55,7 +46,7 @@ export default function Home() {
         setIsDatabaseAvailable(false)
         setConfigs([fallbackConfig])
         setSelectedConfig(fallbackConfig)
-        setError(`Database: ${status.message}`)
+        setError(`${status.message} - ${status.recommendation || ""}`)
         setIsLoading(false)
       }
     } catch (error) {
@@ -69,217 +60,212 @@ export default function Home() {
   }
 
   const loadConfigs = async () => {
+    setIsLoading(true)
     try {
-      setIsLoading(true)
-      setError(null)
+      const response = await fetch("/api/configs")
+      const data = await response.json()
 
-      const agents = await ApiClient.getAgents()
-      setConfigs(agents)
-
-      if (agents.length > 0) {
-        setSelectedConfig(agents[0])
-      } else {
-        setSelectedConfig(fallbackConfig)
-      }
+      // Ensure we have valid configs array
+      const validConfigs = Array.isArray(data) ? data : []
+      setConfigs(validConfigs)
+      setSelectedConfig(validConfigs[0] || fallbackConfig)
+      setIsLoading(false)
     } catch (error) {
-      console.error("Error loading configurations:", error)
-      const errorMessage = error instanceof Error ? error.message : "Failed to load configurations"
-      setError(errorMessage)
-    } finally {
+      console.error("Error loading configs:", error)
+      setConfigs([fallbackConfig])
+      setSelectedConfig(fallbackConfig)
+      setError("Error loading configs - using demo mode")
       setIsLoading(false)
     }
   }
 
-  const handleConfigUpdate = useCallback(async (updatedConfig: CritterConfig) => {
-    try {
-      setError(null)
-      const updated = await ApiClient.updateAgent(updatedConfig.businessId, updatedConfig)
-      setConfigs((prev) => prev.map((config) => (config.businessId === updated.businessId ? updated : config)))
-      setSelectedConfig(updated)
-      setPreviewConfig(null)
-    } catch (error) {
-      console.error("Error updating configuration:", error)
-      setError(error instanceof Error ? error.message : "Failed to update configuration")
-    }
-  }, [])
-
-  const handleConfigCreate = useCallback(async (newConfig: CritterConfig) => {
-    try {
-      setError(null)
-      const created = await ApiClient.createAgent(newConfig)
-      setConfigs((prev) => [...prev, created])
-      setSelectedConfig(created)
-      setPreviewConfig(null)
-    } catch (error) {
-      console.error("Error creating configuration:", error)
-      setError(error instanceof Error ? error.message : "Failed to create configuration")
-    }
-  }, [])
-
-  const handleConfigDelete = useCallback(
-    async (configToDelete: CritterConfig) => {
-      try {
-        setError(null)
-        await ApiClient.deleteAgent(configToDelete.businessId)
-
-        setConfigs((prev) => {
-          const newConfigs = prev.filter((config) => config.businessId !== configToDelete.businessId)
-          if (selectedConfig?.businessId === configToDelete.businessId) {
-            const newSelected = newConfigs[0] || null
-            setSelectedConfig(newSelected)
-          }
-          return newConfigs
-        })
-        setPreviewConfig(null)
-      } catch (error) {
-        console.error("Error deleting configuration:", error)
-        setError(error instanceof Error ? error.message : "Failed to delete configuration")
-      }
-    },
-    [selectedConfig],
-  )
-
-  const handleConfigPreview = useCallback((previewData: Partial<CritterConfig>) => {
-    setSelectedConfig((currentSelected) => {
-      if (currentSelected) {
-        const merged = { ...currentSelected, ...previewData } as CritterConfig
-        setPreviewConfig(merged)
-        return currentSelected
-      }
-      return currentSelected
-    })
-  }, [])
-
-  const handleConfigSelect = useCallback((config: CritterConfig) => {
+  const handleConfigSelect = (config: Config) => {
     setSelectedConfig(config)
-    setPreviewConfig(null)
-  }, [])
+  }
 
-  const handleFeedback = useCallback((feedback: FeedbackData) => {
-    console.log("Feedback received:", feedback)
-  }, [])
-
-  const handleAnalytics = useCallback((analytics: any) => {
-    console.log("Analytics data:", analytics)
-  }, [])
-
-  const handleExportConfigs = useCallback(() => {
+  const handleConfigUpdate = async (config: Config) => {
     try {
-      const dataStr = JSON.stringify(configs, null, 2)
-      const dataBlob = new Blob([dataStr], { type: "application/json" })
-      const url = URL.createObjectURL(dataBlob)
-      const link = document.createElement("a")
-      link.href = url
-      link.download = `critter-chat-configs-${new Date().toISOString().split("T")[0]}.json`
-      link.click()
-      URL.revokeObjectURL(url)
-    } catch (error) {
-      console.error("Error exporting configurations:", error)
-      setError("Failed to export configurations")
-    }
-  }, [configs])
+      const response = await fetch(`/api/configs/${config.id}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(config),
+      })
 
-  const handleImportConfigs = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (!file) return
-
-    const reader = new FileReader()
-    reader.onload = async (e) => {
-      try {
-        setError(null)
-        const importedConfigs = JSON.parse(e.target?.result as string) as CritterConfig[]
-
-        for (const config of importedConfigs) {
-          try {
-            await ApiClient.createAgent(config)
-          } catch (error) {
-            console.warn(`Failed to import agent ${config.businessId}:`, error)
-          }
-        }
-        await loadConfigs()
-      } catch (error) {
-        console.error("Error importing configurations:", error)
-        setError("Error importing configurations. Please check the file format.")
+      if (!response.ok) {
+        throw new Error(`Failed to update config: ${response.status}`)
       }
-    }
-    reader.readAsText(file)
-    event.target.value = ""
-  }, [])
 
-  const activeConfig = previewConfig || selectedConfig
+      loadConfigs()
+      toast.success("Config updated successfully!")
+    } catch (error: any) {
+      console.error("Error updating config:", error)
+      toast.error(`Failed to update config: ${error.message}`)
+    }
+  }
+
+  const handleConfigCreate = async (config: Config) => {
+    try {
+      const response = await fetch(`/api/configs`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(config),
+      })
+
+      if (!response.ok) {
+        throw new Error(`Failed to create config: ${response.status}`)
+      }
+
+      loadConfigs()
+      toast.success("Config created successfully!")
+    } catch (error: any) {
+      console.error("Error creating config:", error)
+      toast.error(`Failed to create config: ${error.message}`)
+    }
+  }
+
+  const handleConfigDelete = async (configId: string) => {
+    try {
+      const response = await fetch(`/api/configs/${configId}`, {
+        method: "DELETE",
+      })
+
+      if (!response.ok) {
+        throw new Error(`Failed to delete config: ${response.status}`)
+      }
+
+      loadConfigs()
+      toast.success("Config deleted successfully!")
+    } catch (error: any) {
+      console.error("Error deleting config:", error)
+      toast.error(`Failed to delete config: ${error.message}`)
+    }
+  }
+
+  // Fixed filtering logic with proper null checks
+  const filteredConfigs = configs.filter((config) => {
+    if (!config || !debouncedFilter) return true
+
+    const searchTerm = debouncedFilter.toLowerCase()
+    const name = config.name?.toLowerCase() || ""
+    const description = config.description?.toLowerCase() || ""
+    const content = config.content?.toLowerCase() || ""
+
+    return name.includes(searchTerm) || description.includes(searchTerm) || content.includes(searchTerm)
+  })
 
   const getStatusMessage = () => {
     if (!dbStatus) return "Checking database..."
 
-    if (dbStatus.isReal) {
-      return "✅ Connected to PostgreSQL database"
-    } else if (dbStatus.canConnect) {
-      return "🔄 Using mock database (v0 environment)"
-    } else {
-      return "⚠️ Database not available"
+    switch (dbStatus.status) {
+      case "connected":
+        return "✅ Connected to PostgreSQL database"
+      case "mock_mode":
+        return "🔄 Using mock database (development mode)"
+      case "not_configured":
+        return "⚙️ DATABASE_URL not configured"
+      case "invalid_format":
+        return "⚠️ DATABASE_URL format invalid"
+      case "connection_failed":
+        return "❌ Database connection failed"
+      default:
+        return "🔄 Using mock database"
     }
   }
 
   const getStatusColor = () => {
     if (!dbStatus) return "text-gray-600"
 
-    if (dbStatus.isReal) {
-      return "text-green-600"
-    } else if (dbStatus.canConnect) {
-      return "text-blue-600"
-    } else {
-      return "text-yellow-600"
+    switch (dbStatus.status) {
+      case "connected":
+        return "text-green-600"
+      case "mock_mode":
+        return "text-blue-600"
+      case "not_configured":
+      case "invalid_format":
+        return "text-yellow-600"
+      case "connection_failed":
+        return "text-red-600"
+      default:
+        return "text-gray-600"
     }
   }
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="flex h-screen items-center justify-center">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-orange-500 mx-auto mb-4"></div>
-          <p className="text-gray-600">Loading configurations...</p>
-          <p className="text-sm text-gray-500 mt-2">{getStatusMessage()}</p>
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
+          <p className="text-muted-foreground">Loading configurations...</p>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="bg-white border-b p-4">
-        <div className="container mx-auto flex justify-between items-center">
-          <h1 className="text-2xl font-bold">Critter Chat Agent Builder</h1>
-          <div className="flex items-center space-x-4">
-            {previewConfig && <span className="text-sm text-blue-600 font-medium">🔄 Live Preview Active</span>}
-            <span className={`text-sm font-medium ${getStatusColor()}`}>{getStatusMessage()}</span>
-            {error && (
-              <div className="flex items-center space-x-2">
-                <span className="text-sm text-red-600">⚠️ {error}</span>
-                <button onClick={() => setError(null)} className="text-red-600 hover:text-red-800 text-sm underline">
-                  Dismiss
-                </button>
-              </div>
-            )}
-          </div>
+    <div className="flex h-screen antialiased text-foreground bg-background">
+      <aside className="w-80 border-r flex-shrink-0">
+        <div className="p-4">
+          <h1 className="text-2xl font-bold">Critter Chat Agents</h1>
+          <p className="text-sm text-muted-foreground">Manage your chat agent configurations.</p>
         </div>
-      </div>
 
-      <AdminDashboard
-        configs={configs}
-        onConfigUpdate={handleConfigUpdate}
-        onConfigCreate={handleConfigCreate}
-        onConfigDelete={handleConfigDelete}
-        onConfigPreview={handleConfigPreview}
-        onConfigSelect={handleConfigSelect}
-        onExportConfigs={handleExportConfigs}
-        onImportConfigs={handleImportConfigs}
-        selectedConfig={selectedConfig}
-        error={error}
-        onRetry={loadConfigs}
-        isDatabaseAvailable={isDatabaseAvailable}
-      />
+        <div className="p-4">
+          <Input
+            type="search"
+            placeholder="Filter agents..."
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+          />
+        </div>
 
-      {activeConfig && <ChatWidget config={activeConfig} onFeedback={handleFeedback} onAnalytics={handleAnalytics} />}
+        <div className="p-4">
+          <Dialog>
+            <DialogTrigger asChild>
+              <Button className="w-full">Create New Agent</Button>
+            </DialogTrigger>
+            <DialogContent className="sm:max-w-[425px]">
+              <DialogHeader>
+                <DialogTitle>Create Chat Agent</DialogTitle>
+                <DialogDescription>Create a new chat agent by filling out the form below.</DialogDescription>
+              </DialogHeader>
+              <ConfigForm onSubmit={handleConfigCreate} />
+            </DialogContent>
+          </Dialog>
+        </div>
+
+        {error && (
+          <div className="p-4">
+            <Badge variant="destructive" className="w-full justify-center">
+              {error}
+            </Badge>
+          </div>
+        )}
+
+        <div className="p-4">
+          <p className={`text-sm ${getStatusColor()}`}>{getStatusMessage()}</p>
+        </div>
+
+        <ConfigList
+          configs={filteredConfigs}
+          selectedConfig={selectedConfig}
+          onSelect={handleConfigSelect}
+          onDelete={handleConfigDelete}
+          isLoading={isLoading}
+        />
+      </aside>
+
+      <main className="flex-1 p-8 overflow-auto">
+        <ConfigForm
+          config={selectedConfig}
+          onSubmit={handleConfigUpdate}
+          isLoading={isLoading}
+          isDatabaseAvailable={isDatabaseAvailable}
+        />
+      </main>
     </div>
   )
 }

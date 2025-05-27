@@ -1,61 +1,73 @@
 import { NextResponse } from "next/server"
 
-// Enhanced endpoint to check database status
 export async function GET() {
   try {
-    console.log("🔍 Checking database status...")
+    const databaseUrl = process.env.DATABASE_URL
 
-    if (!process.env.DATABASE_URL) {
+    // Check if DATABASE_URL is configured
+    if (!databaseUrl) {
       return NextResponse.json({
-        success: false,
         status: "not_configured",
         message: "DATABASE_URL environment variable not set",
         canConnect: false,
         isReal: false,
+        recommendation: "Add DATABASE_URL to your environment variables",
+      })
+    }
+
+    // Check if DATABASE_URL has valid format
+    if (!databaseUrl.includes("://")) {
+      return NextResponse.json({
+        status: "invalid_format",
+        message: "DATABASE_URL format is invalid",
+        canConnect: false,
+        isReal: false,
+        recommendation: "DATABASE_URL should be in format: postgresql://user:pass@host:port/db",
       })
     }
 
     // Try to connect to the database
-    const { testConnection, initializeDatabase } = await import("@/lib/db")
+    try {
+      const { Pool } = await import("pg")
+      const pool = new Pool({
+        connectionString: databaseUrl,
+        ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : false,
+        connectionTimeoutMillis: 5000,
+      })
 
-    const connectionResult = await testConnection()
+      const client = await pool.connect()
+      await client.query("SELECT NOW()")
+      client.release()
+      await pool.end()
 
-    if (!connectionResult.success) {
       return NextResponse.json({
-        success: false,
-        status: "error",
-        message: connectionResult.message,
+        status: "connected",
+        message: "Successfully connected to PostgreSQL database",
+        canConnect: true,
+        isReal: true,
+        recommendation: "Database is working correctly",
+      })
+    } catch (dbError) {
+      console.error("Database connection error:", dbError)
+
+      return NextResponse.json({
+        status: "connection_failed",
+        message: `Database connection failed: ${dbError instanceof Error ? dbError.message : "Unknown error"}`,
         canConnect: false,
-        isReal: connectionResult.isReal,
+        isReal: false,
+        recommendation: "Check your DATABASE_URL and ensure the database is accessible",
       })
     }
-
-    // Try to initialize tables if using real database
-    let tablesInitialized = true
-    if (connectionResult.isReal) {
-      tablesInitialized = await initializeDatabase()
-    }
-
-    return NextResponse.json({
-      success: true,
-      status: connectionResult.isReal ? "connected" : "mock",
-      message: connectionResult.message,
-      canConnect: true,
-      isReal: connectionResult.isReal,
-      tablesInitialized,
-    })
   } catch (error) {
-    console.error("❌ Database status check failed:", error)
+    console.error("Database status check error:", error)
 
-    const errorMessage = error instanceof Error ? error.message : "Unknown error"
-
+    // If pg module is not available, use mock database
     return NextResponse.json({
-      success: false,
-      status: "error",
-      message: errorMessage,
-      canConnect: false,
+      status: "mock_mode",
+      message: "Using mock database (pg module not available)",
+      canConnect: true,
       isReal: false,
-      error: errorMessage,
+      recommendation: "This is normal in development environments",
     })
   }
 }
