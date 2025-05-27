@@ -172,32 +172,25 @@ export default function AdminDashboard({
 
   return (
     <div className="container mx-auto p-6 max-w-7xl">
-      <div className="flex justify-between items-center mb-6">
-        <div>
-          <h2 className="text-xl text-gray-600">Build and test your AI chat agents</h2>
-          <p className="text-sm text-green-600">✅ Auto-saved to browser storage</p>
-        </div>
-        <div className="flex space-x-2">
-          <Button variant="outline" onClick={onExportConfigs} disabled={configs.length === 0}>
-            <Download className="w-4 h-4 mr-2" />
-            Backup ({configs.length} agents)
-          </Button>
-          <Button variant="outline" onClick={() => fileInputRef.current?.click()}>
-            <Upload className="w-4 h-4 mr-2" />
-            Restore
-          </Button>
-          <Button onClick={handleCreateNew}>Create New Agent</Button>
-        </div>
-      </div>
-
       {/* Hidden file input for import */}
       <input ref={fileInputRef} type="file" accept=".json" onChange={onImportConfigs} className="hidden" />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Agent List */}
         <Card className="lg:col-span-1">
-          <CardHeader>
+          <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle>Chat Agents ({configs.length})</CardTitle>
+            <div className="flex space-x-1">
+              <Button variant="outline" size="sm" onClick={onExportConfigs} disabled={configs.length === 0}>
+                <Download className="w-3 h-3" />
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()}>
+                <Upload className="w-3 h-3" />
+              </Button>
+              <Button size="sm" onClick={handleCreateNew}>
+                +
+              </Button>
+            </div>
           </CardHeader>
           <CardContent>
             <div className="space-y-2">
